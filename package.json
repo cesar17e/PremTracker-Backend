@@ -19,6 +19,9 @@
   "author": "",
   "license": "ISC",
   "type": "module",
+  "engines": {
+    "node": "24.22.3"
+  },
   "dependencies": {
     "@types/express": "^5.0.6",
     "@types/node": "^25.0.8",

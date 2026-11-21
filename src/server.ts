@@ -60,6 +60,7 @@ process.on("SIGTERM", () => shutdown("SIGTERM received. Shutting down...", 0, se
 
 async function startServer() {
   try {
+    console.log(`[startup] Node.js ${process.version}`);
     const warnings = validateStartupConfig();
     for (const warning of warnings) {
       console.warn(`[startup] ${warning}`);

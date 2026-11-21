@@ -1,5 +1,5 @@
 # syntax=docker/dockerfile:1
-ARG NODE_VERSION=24
+ARG NODE_VERSION=24.22.3
 FROM node:${NODE_VERSION}-bookworm-slim AS build
 
 WORKDIR /app

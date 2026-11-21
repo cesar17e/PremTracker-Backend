@@ -1,8 +1,8 @@
 # PremTracker
 
-PremTracker is a production-oriented Premier League analytics backend built with TypeScript, Node.js, Express, PostgreSQL, Knex, Upstash Redis, and Resend.
+PremTracker is a containerized Premier League analytics backend built with TypeScript, Node.js, Express, PostgreSQL, Knex, Upstash Redis, and Resend.
 
-It is the API layer for a full-stack soccer product, with an Express backend on Render and a frontend on Vercel. The goal is not black-box prediction. The goal is to expose transparent, explainable team analytics — where every output can be traced back to clear, interpretable mathematical reasoning.
+It is the API layer for a full-stack soccer product, with a Dockerized Express backend on Render and a frontend on Vercel. The goal is not black-box prediction. The goal is to expose transparent, explainable team analytics — where every output can be traced back to clear, interpretable mathematical reasoning.
 
 - **Deployed API base:** https://premtracker-api.onrender.com
 - **Health check:** https://premtracker-api.onrender.com/api/health
@@ -291,7 +291,7 @@ POST /api/admin/sync-games
 - Knex migrations
 - Upstash Redis
 - Resend
-- Docker packaging with a multi-stage Node.js 24 build
+- Docker deployment on Render with a multi-stage Node.js 24.22.3 build
 
 ---
 
@@ -324,69 +324,65 @@ Design choices:
 
 ## Deployment Status
 
-The backend is deployed on Render and configured for production-style operation.
+The backend runs as a Docker container on Render. Render builds the image from this repository's Dockerfile and runs the compiled Express API; the frontend is deployed separately on Vercel.
 
 Current production-oriented behavior includes:
 
 - startup config validation
 - health-check endpoint
-- Render-compatible build/start flow
+- multi-stage Docker build with a non-root runtime user
+- separate pre-deploy database migrations
 - live Resend support
 - cookie/CORS behavior for the Vercel frontend
 - frontend redirect support after email verification
 
-Docker support is included in this repository. Switching the existing Render service from its native Node runtime to Docker is a separate deployment step; adding these files does not change its runtime automatically.
+The same Dockerfile is used for local runs and Render deployment. Neon, Upstash, and Resend remain external services, configured through runtime environment variables.
 
 ---
 
-## Local Development
+## Local Development With Docker
 
-### 1. Install
+The image packages the Express API only. PostgreSQL stays on Neon, Redis rate limiting stays on Upstash, email stays on Resend, and the frontend stays on Vercel.
 
-```bash
-npm install
-```
+Both Docker stages use Node.js **24.22.3** on Debian Bookworm slim. The build stage compiles TypeScript, then removes development dependencies. The runtime stage runs the compiled server as the non-root `node` user. The TypeScript compiler, type declarations, and build-cleanup tools are excluded from the runtime image; TypeScript migration files, Knex, and `tsx` remain available for release tasks. `.dockerignore` excludes local environment files and credentials from the build context.
 
-### 2. Configure Environment
+Docker is the primary way to run this backend locally. Install Docker Desktop or Docker Engine and start it first; a separate local Node.js installation is not required for these steps. The container runs the API only. To use the full UI locally, also run the [frontend](https://github.com/cesar17e/PremTracker-Frontend) and point its API base URL to `http://localhost:10000`.
 
-Use [.env.example](.env.example) as the template.
+### 1. Configure Environment
 
-For local development, the important defaults are:
+Create a local `.env` using [.env.example](.env.example). Set `DATABASE_URL` to a reachable development PostgreSQL database and provide a local `JWT_ACCESS_SECRET`. For local browser use:
 
 ```env
 NODE_ENV=development
-PORT=3001
-PUBLIC_BASE_URL=http://localhost:3001
+PORT=10000
+PUBLIC_BASE_URL=http://localhost:10000
 FRONTEND_ORIGINS=http://localhost:3000
 EMAIL_MODE=demo
 COOKIE_SAMESITE=lax
 COOKIE_SECURE=false
 ```
 
-### 3. Run Migrations
+`EMAIL_MODE=demo` previews emails without sending them. This is separate from the frontend's public demo experience.
 
-```bash
-npm run migrate:latest
-```
+For Postgres running directly on Docker Desktop's host machine, use `host.docker.internal` instead of `localhost` in `DATABASE_URL`. No `.env` file is baked into the image; configuration is supplied at runtime. `--env-file` expects plain `KEY=value` entries without shell-style surrounding quotes.
 
-### 4. Start The Server
-
-```bash
-npm run dev
-```
-
----
-
-## Docker
-
-The image packages the Express API only. PostgreSQL stays on Neon, Redis rate limiting stays on Upstash, email stays on Resend, and the frontend stays on Vercel.
-
-The Dockerfile compiles TypeScript in a build stage, removes development dependencies, and runs the compiled server as the non-root `node` user. TypeScript migrations, Knex, and `tsx` remain available for release tasks. `.dockerignore` excludes local environment files and credentials from the build context.
-
-### Build And Run Locally
+### 2. Build The Image
 
 ```bash
 docker build -t premtracker-api:local .
+```
+
+### 3. Apply Database Migrations
+
+```bash
+docker run --rm --env-file .env premtracker-api:local npm run migrate:deploy
+```
+
+Run this against your development database. Migrations create the schema; an empty database also needs the existing team and match seed scripts before it can show football data. Starting the API never seeds data automatically.
+
+### 4. Start The API
+
+```bash
 docker run --rm --name premtracker-api-local --env-file .env \
   -e NODE_ENV=development -e EMAIL_MODE=demo -e PORT=10000 \
   -e PUBLIC_BASE_URL=http://localhost:10000 \
@@ -394,23 +390,32 @@ docker run --rm --name premtracker-api-local --env-file .env \
   -p 127.0.0.1:10000:10000 premtracker-api:local
 ```
 
-Use a development database URL in your local `.env`. For Postgres running directly on Docker Desktop's host machine, use `host.docker.internal` instead of `localhost` in that URL. No `.env` file is baked into the image; configuration is supplied at runtime. `--env-file` expects plain `KEY=value` entries without shell-style surrounding quotes.
-
 Open `http://localhost:10000/api/health`. The health route is DB-free, but startup still performs one database connectivity check, so a reachable database is required to start the server.
+
+### 5. Verify The Container
 
 On Apple Silicon, validate Render's target architecture with:
 
 ```bash
 docker build --platform linux/amd64 -t premtracker-api:amd64 .
+docker run --rm --platform linux/amd64 premtracker-api:amd64 node --version
 ```
+
+The version check should print `v24.22.3`. `EXPOSE 10000` documents the default; the server reads `PORT` at runtime and listens on `0.0.0.0`.
+
+To run the regression suite against that image's production dependencies, mount only the test directory:
+
+```bash
+docker run --rm --platform linux/amd64 --network none \
+  --mount type=bind,source="$(pwd)/tests",target=/app/tests,readonly \
+  premtracker-api:amd64 node --test tests/security-regression.test.mjs
+```
+
+This needs no `.env` file. External networking is disabled, and dependencies are mocked. Use `node --test` here because `npm test` also rebuilds the application and requires development tools intentionally absent from the runtime image.
 
 ### Explicit Maintenance Commands
 
-Starting the container does not run migrations, seeds, or backfills. Run migrations separately against the intended database:
-
-```bash
-docker run --rm --env-file .env premtracker-api:local npm run migrate:deploy
-```
+Starting the container does not run migrations, seeds, or backfills. Use the separate migration command above when schema changes are introduced.
 
 For the optional logo/short-name backfill in a compiled deployment:
 
@@ -422,28 +427,59 @@ Local source-based development still supports `npm run teams:backfill-logos`.
 
 On SIGTERM or SIGINT, the API stops accepting new HTTP connections, drains active requests, and then closes its database pool. A 25-second deadline prevents shutdown from hanging indefinitely.
 
+From another terminal, stop the local API with:
+
+```bash
+docker stop --timeout 30 premtracker-api-local
+```
+
+### Local Verification Scope
+
+The AMD64 production image has been checked for startup, DB-free health responses, JWT-protected routes, CORS, and database reads using disposable local PostgreSQL. All three migrations apply successfully, and rerunning the migration command is a no-op. Regression tests separately exercise refresh/cookie and email behavior with mocks.
+
+Local checks use disposable PostgreSQL and mocks where appropriate. Live Neon connectivity, browser cookie behavior, Upstash availability, and Resend delivery require separate integration checks in the deployed environment.
+
+---
+
+## Source Development Without Docker
+
+For source editing with automatic restarts, use Node.js **24.22.3**, matching `.node-version` and `package.json`. Configure a development `.env` as above, then run:
+
+```bash
+npm ci --include=dev
+npm run migrate:latest
+npm run dev
+```
+
+Run build, regression, and dependency checks with:
+
+```bash
+npm test
+npm audit
+npm audit --omit=dev
+```
+
+`npm test` builds the backend and checks JSON limits and compressed bodies, protected routes, JWTs, refresh cookies, proxy-IP bucketing, limiter failures, and email helper compatibility. Database, rate-limit, and email interactions are mocked; the suite does not send real emails or query Neon.
+
 ---
 
 ## Render Deployment
 
-Current native Node runtime settings:
+The `premtracker-api` web service uses these settings:
 
+- Runtime: Docker
+- Branch: `main`
 - Root Directory: leave blank
-- Build Command: `npm ci --include=dev && npm run build`
-- Start Command: `npm start`
-- Pre-Deploy Command: `npm run migrate:deploy`
-- Health Check Path: `/api/health`
-
-For a later Docker runtime switch on the existing service:
-
 - Dockerfile Path: `./Dockerfile`
 - Docker Build Context: repository root (`.`)
 - Docker Command: leave empty to use the image's `CMD`
-- Pre-Deploy Command: `npm run migrate:deploy` (requires a supported paid service)
+- Pre-Deploy Command: `npm run migrate:deploy`
 - Health Check Path: `/api/health`
-- Keep the existing environment variables and API URL
+- API URL: `https://premtracker-api.onrender.com`
 
-Render builds the Dockerfile instead of using the native build/start commands. No image registry or new database is required. Keeping the existing API URL preserves the frontend's API configuration.
+Render builds the Dockerfile and starts the container with `node dist/server.js`. The separate pre-deploy command applies migrations before the new release starts. No image registry is needed, and PostgreSQL remains on Neon.
+
+The Dockerfile defaults both stages to Node.js `24.22.3`. If a Render `NODE_VERSION` build argument is configured, keep it at `24.22.3` or remove it to use the Dockerfile default. Confirm the actual runtime in startup logs: `[startup] Node.js v24.22.3`. `.node-version` and `engines.node` also pin source-based development to that version.
 
 Required production env values include:
 

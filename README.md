@@ -2,7 +2,7 @@
 
 PremTracker is a production-oriented Premier League analytics backend built with TypeScript, Node.js, Express, PostgreSQL, Knex, Upstash Redis, and Resend.
 
-It is designed as the API layer for a full-stack soccer product: the backend is live on Render today, and a Vercel frontend is the next planned step. The goal is not black-box prediction. The goal is to expose transparent, explainable team analytics — where every output can be traced back to clear, interpretable mathematical reasoning.
+It is the API layer for a full-stack soccer product, with an Express backend on Render and a frontend on Vercel. The goal is not black-box prediction. The goal is to expose transparent, explainable team analytics — where every output can be traced back to clear, interpretable mathematical reasoning.
 
 - **Deployed API base:** https://premtracker-api.onrender.com
 - **Health check:** https://premtracker-api.onrender.com/api/health
@@ -42,7 +42,7 @@ PremTracker lets authenticated users:
 
 It also includes protected admin tooling to keep match data fresh through a controlled EPL sync workflow.
 
-This repository is the backend only. It is being built so a future Vercel frontend can consume it cleanly with:
+This repository contains the backend. The Vercel frontend consumes it with:
 
 - bearer access tokens for API requests
 - rotating refresh tokens in `httpOnly` cookies
@@ -291,6 +291,7 @@ POST /api/admin/sync-games
 - Knex migrations
 - Upstash Redis
 - Resend
+- Docker packaging with a multi-stage Node.js 24 build
 
 ---
 
@@ -331,12 +332,10 @@ Current production-oriented behavior includes:
 - health-check endpoint
 - Render-compatible build/start flow
 - live Resend support
-- cookie/CORS behavior for a future Vercel frontend
+- cookie/CORS behavior for the Vercel frontend
 - frontend redirect support after email verification
 
-Planned next step:
-
-- build the frontend on Vercel and connect it to this API
+Docker support is included in this repository. Switching the existing Render service from its native Node runtime to Docker is a separate deployment step; adding these files does not change its runtime automatically.
 
 ---
 
@@ -378,14 +377,73 @@ npm run dev
 
 ---
 
+## Docker
+
+The image packages the Express API only. PostgreSQL stays on Neon, Redis rate limiting stays on Upstash, email stays on Resend, and the frontend stays on Vercel.
+
+The Dockerfile compiles TypeScript in a build stage, removes development dependencies, and runs the compiled server as the non-root `node` user. TypeScript migrations, Knex, and `tsx` remain available for release tasks. `.dockerignore` excludes local environment files and credentials from the build context.
+
+### Build And Run Locally
+
+```bash
+docker build -t premtracker-api:local .
+docker run --rm --name premtracker-api-local --env-file .env \
+  -e NODE_ENV=development -e EMAIL_MODE=demo -e PORT=10000 \
+  -e PUBLIC_BASE_URL=http://localhost:10000 \
+  -e COOKIE_SECURE=false -e COOKIE_SAMESITE=lax \
+  -p 127.0.0.1:10000:10000 premtracker-api:local
+```
+
+Use a development database URL in your local `.env`. For Postgres running directly on Docker Desktop's host machine, use `host.docker.internal` instead of `localhost` in that URL. No `.env` file is baked into the image; configuration is supplied at runtime. `--env-file` expects plain `KEY=value` entries without shell-style surrounding quotes.
+
+Open `http://localhost:10000/api/health`. The health route is DB-free, but startup still performs one database connectivity check, so a reachable database is required to start the server.
+
+On Apple Silicon, validate Render's target architecture with:
+
+```bash
+docker build --platform linux/amd64 -t premtracker-api:amd64 .
+```
+
+### Explicit Maintenance Commands
+
+Starting the container does not run migrations, seeds, or backfills. Run migrations separately against the intended database:
+
+```bash
+docker run --rm --env-file .env premtracker-api:local npm run migrate:deploy
+```
+
+For the optional logo/short-name backfill in a compiled deployment:
+
+```bash
+docker run --rm --env-file .env premtracker-api:local npm run teams:backfill-logos:deploy
+```
+
+Local source-based development still supports `npm run teams:backfill-logos`.
+
+On SIGTERM or SIGINT, the API stops accepting new HTTP connections, drains active requests, and then closes its database pool. A 25-second deadline prevents shutdown from hanging indefinitely.
+
+---
+
 ## Render Deployment
 
-Recommended Render settings:
+Current native Node runtime settings:
 
 - Root Directory: leave blank
-- Build Command: `npm ci && npm run build`
+- Build Command: `npm ci --include=dev && npm run build`
 - Start Command: `npm start`
 - Pre-Deploy Command: `npm run migrate:deploy`
+- Health Check Path: `/api/health`
+
+For a later Docker runtime switch on the existing service:
+
+- Dockerfile Path: `./Dockerfile`
+- Docker Build Context: repository root (`.`)
+- Docker Command: leave empty to use the image's `CMD`
+- Pre-Deploy Command: `npm run migrate:deploy` (requires a supported paid service)
+- Health Check Path: `/api/health`
+- Keep the existing environment variables and API URL
+
+Render builds the Dockerfile instead of using the native build/start commands. No image registry or new database is required. Keeping the existing API URL preserves the frontend's API configuration.
 
 Required production env values include:
 
@@ -402,7 +460,7 @@ Required production env values include:
 - `EMAIL_FROM`
 - `SPORTS_API_KEY`
 
-If the frontend is not live yet, keep `FRONTEND_ORIGINS=http://localhost:3000` and leave `EMAIL_VERIFY_REDIRECT_URL` empty until the Vercel client exists.
+Set `FRONTEND_ORIGINS` to your actual frontend origin(s), such as `https://premtracker.pro,http://localhost:3000`. Set `EMAIL_VERIFY_REDIRECT_URL` and `PASSWORD_RESET_REDIRECT_URL` to the corresponding frontend pages. Docker introduces no new required environment variables; keep credentials in Render's environment settings.
 
 ---
 

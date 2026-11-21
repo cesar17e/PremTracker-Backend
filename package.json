@@ -12,7 +12,8 @@
     "migrate:rollback": "tsx node_modules/knex/bin/cli.js --knexfile knexfile.ts migrate:rollback",
     "migrate:deploy": "NODE_ENV=production npm run migrate:latest",
     "migrate:make": "tsx node_modules/knex/bin/cli.js --knexfile knexfile.ts migrate:make",
-    "teams:backfill-logos": "tsx src/scripts/backfillTeamLogos.ts"
+    "teams:backfill-logos": "tsx src/scripts/backfillTeamLogos.ts",
+    "teams:backfill-logos:deploy": "node dist/scripts/backfillTeamLogos.js"
   },
   "keywords": [],
   "author": "",
@@ -35,6 +36,7 @@
     "resend": "^6.7.0",
     "rimraf": "^6.1.2",
     "typescript": "^5.9.3",
+    "tsx": "^4.21.0",
     "validator": "^13.15.26"
   },
   "devDependencies": {
@@ -43,7 +45,6 @@
     "@types/cors": "^2.8.19",
     "@types/pg": "^8.16.0",
     "@types/validator": "^13.15.10",
-    "nodemon": "^3.1.11",
-    "tsx": "^4.21.0"
+    "nodemon": "^3.1.11"
   }
 }

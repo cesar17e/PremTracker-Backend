@@ -2,6 +2,7 @@ import express from "express";
 import cors from "cors";
 import cookieParser from "cookie-parser";
 import dotenv from "dotenv";
+import type { Server } from "node:http";
 import routes from "./routes/index.js";
 import { errorHandler, notFoundHandler } from "./middleware/errorHandler.js";
 import {
@@ -52,6 +53,10 @@ app.use(errorHandler);
 
 // Health check + DB test on startup
 const PORT = getPort();
+let server: Server | undefined;
+
+process.on("SIGINT", () => shutdown("SIGINT received. Shutting down...", 0, server));
+process.on("SIGTERM", () => shutdown("SIGTERM received. Shutting down...", 0, server));
 
 async function startServer() {
   try {
@@ -70,7 +75,7 @@ async function startServer() {
       emailMode: getEmailMode(),
     });
 
-    app.listen(PORT, () => {
+    server = app.listen(PORT, "0.0.0.0", () => {
       console.log(`Server listening on port ${PORT}`);
     });
   } catch (err) {
